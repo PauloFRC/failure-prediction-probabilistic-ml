@@ -9,6 +9,8 @@ dependencies:
   - numpy
   - pandas
   - matplotlib
+  - pytorch 
+  - polars
 
   - pip:
     - logparser3
