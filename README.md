@@ -12,8 +12,8 @@ After downloading, extract the files and place them in the `data/` directory.
 
 ## Installation
 
-Install dependencies using conda through
+This project requires conda. Setup the environment and setup the project running:
 
-`conda env create -f environment.yml`
+`make`
 
 
