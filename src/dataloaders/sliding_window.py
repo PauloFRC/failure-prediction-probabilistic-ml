@@ -21,6 +21,13 @@ class LogsSlidingWindow(Dataset):
         self.event_to_idx = {e: i for i, e in enumerate(self.event_ids)}
         self.n_events = len(self.event_ids)
         print(f"Found {self.n_events} unique event types")
+
+        # Create mapping column in DataFrame
+        mapping_df = pl.DataFrame({
+            "EventId": self.event_ids, 
+            "EventIndex": range(len(self.event_ids))
+        })
+        self.df = self.df.join(mapping_df, on="EventId", how="left")
         
         self.window_size = self._parse_duration(window_size)
         self.step_size = self._parse_duration(step_size)
@@ -66,24 +73,16 @@ class LogsSlidingWindow(Dataset):
 
         timestamps = self.df['Timestamp'].to_numpy()
         
-        self.window_indices = []
+        starts = np.array(self.window_starts)
         
-        for i, start in enumerate(self.window_starts):
-            end = start + self.window_size
-            
-            # Binary search to find first row >= start time
-            start_idx = np.searchsorted(timestamps, start, side='left')
-            
-            # Binary search to find first row >= end time
-            end_idx = np.searchsorted(timestamps, end, side='left')
-            
-            # Store the row range for this window
-            self.window_indices.append((start_idx, end_idx))
-            
-            if (i + 1) % 10000 == 0:
-                print(f"Indexed {i + 1}/{len(self.window_starts)} windows...")
+        ends = starts + self.window_size
         
-        print("Index built successfully!")
+        start_idxs = np.searchsorted(timestamps, starts, side='left')
+        end_idxs = np.searchsorted(timestamps, ends, side='left')
+
+        self.window_indices = np.column_stack((start_idxs, end_idxs))
+        
+        print(f"Index built. Shape: {self.window_indices.shape}")
     
     def __len__(self):
         return len(self.window_starts)
@@ -95,24 +94,21 @@ class LogsSlidingWindow(Dataset):
         
         # Create count vector (initially all zeros)
         count_vector = np.zeros(self.n_events, dtype=np.float32)
+        anomaly = False
+
         if len(window_data) > 0:
-            # Count how many times each EventId appears in this window
-            event_counts = (
-                window_data
-                .group_by('EventId')
-                .agg(pl.len().alias('count'))
-            )
+            counts = window_data['EventIndex'].value_counts()
+
+            indices = counts['EventIndex'].to_numpy()
+            values = counts['count'].to_numpy()
+
+            count_vector[indices] = values
             
-            for row in event_counts.iter_rows(named=True):
-                event_id = row['EventId']
-                if event_id in self.event_to_idx:
-                    idx_pos = self.event_to_idx[event_id]
-                    count_vector[idx_pos] = row['count']
+             # Apply log normalization | TODO: explicar ou validar se é o melhor método
+            count_vector = np.log1p(count_vector)
             
             # Label is anomaly if any failure event occurred in this window
             anomaly = window_data['Label'].any()
-        else:
-            anomaly = False 
         
         # Convert to PyTorch tensors
         count_tensor = torch.tensor(count_vector, dtype=torch.float32)
