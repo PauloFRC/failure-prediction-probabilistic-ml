@@ -16,18 +16,6 @@ REGEX_PATTERNS = [
     r'/[a-zA-Z0-9_/\-\.]+',                  # File paths
 ]
 
-# def clean_log_file(input_path, output_path, max_lines=0):
-#     # Clean log file - keep only safe ASCII characters to avoid parsing issues
-#     print(f"Cleaning log file: {input_path}")
-    
-#     with open(input_path, 'r', encoding='utf-8', errors='ignore') as infile:
-#         with open(output_path, 'w', encoding='utf-8') as outfile:
-#             for line in infile:
-#                 cleaned = ''.join(c for c in line if c.isalnum() or c in ' .-_:/<>|[]()=+*\n\t')
-#                 outfile.write(cleaned)
-    
-#     print(f"Cleaned log saved to: {output_path}")
-
 def _clean_log_file(input_path, output_path, max_lines=None):
     print(f"Cleaning log file: {input_path}")
     if max_lines:
