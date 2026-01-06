@@ -79,7 +79,7 @@ class LogsSlidingWindow(Dataset):
         self._build_index()
 
         if filter_strategy in ['isolation_forest', 'combined']:
-            contamination = self.filter_params.get('contamination', 0.05)
+            contamination = self.filter_params.get('contamination', 0.01)
             self._apply_isolation_forest_filtering(contamination)
     
     def _parse_duration(self, duration_str):
