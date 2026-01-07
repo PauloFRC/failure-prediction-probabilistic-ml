@@ -1,6 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import average_precision_score, roc_auc_score, roc_curve, precision_recall_curve
+import seaborn as sns
+import pandas as pd
+import torch
 
 
 def plot_anomaly_detection_analysis(scores, labels, pred_types, figsize=(20, 16)):
@@ -35,7 +38,6 @@ def plot_anomaly_detection_analysis(scores, labels, pred_types, figsize=(20, 16)
         future_roc = roc_auc_score(future_labels, scores)
         future_pr = average_precision_score(future_labels, scores)
     
-    # ROC curve
     ax1 = fig.add_subplot(gs[0, 0])
     fpr, tpr, _ = roc_curve(labels, scores)
     ax1.plot(fpr, tpr, linewidth=2, label=f'Overall (AUC={overall_roc:.4f})')
@@ -46,7 +48,6 @@ def plot_anomaly_detection_analysis(scores, labels, pred_types, figsize=(20, 16)
     ax1.legend(loc='lower right')
     ax1.grid(alpha=0.3)
     
-    # Precision-Recall Curve
     ax2 = fig.add_subplot(gs[0, 1])
     precision, recall, _ = precision_recall_curve(labels, scores)
     ax2.plot(recall, precision, linewidth=2, label=f'Overall (AP={overall_pr:.4f})')
@@ -58,27 +59,7 @@ def plot_anomaly_detection_analysis(scores, labels, pred_types, figsize=(20, 16)
     ax2.legend(loc='lower left')
     ax2.grid(alpha=0.3)
     
-    # Score Distribution by Type
     ax3 = fig.add_subplot(gs[0, 2])
-    bins = 50
-    ax3.hist(normal_scores, bins=bins, alpha=0.6, label=f'Normal (n={len(normal_scores)})', 
-             color='green', density=True)
-    if len(current_fail_scores) > 0:
-        ax3.hist(current_fail_scores, bins=bins, alpha=0.6, 
-                label=f'Current Failure (n={len(current_fail_scores)})', 
-                color='red', density=True)
-    if len(future_fail_scores) > 0:
-        ax3.hist(future_fail_scores, bins=bins, alpha=0.6, 
-                label=f'Future Failure (n={len(future_fail_scores)})', 
-                color='orange', density=True)
-    ax3.set_xlabel('Anomaly Score', fontsize=11)
-    ax3.set_ylabel('Density', fontsize=11)
-    ax3.set_title('Score Distribution by Type', fontsize=13, fontweight='bold')
-    ax3.legend()
-    ax3.grid(alpha=0.3)
-    
-    # Box Plot
-    ax4 = fig.add_subplot(gs[1, 0])
     data_for_box = [normal_scores]
     labels_for_box = ['Normal']
     colors_box = ['green']
@@ -93,64 +74,86 @@ def plot_anomaly_detection_analysis(scores, labels, pred_types, figsize=(20, 16)
         labels_for_box.append('Future\nFailure')
         colors_box.append('orange')
     
-    bp = ax4.boxplot(data_for_box, labels=labels_for_box, patch_artist=True, 
+    bp = ax3.boxplot(data_for_box, labels=labels_for_box, patch_artist=True, 
                      showfliers=False)
     for patch, color in zip(bp['boxes'], colors_box):
         patch.set_facecolor(color)
         patch.set_alpha(0.6)
-    ax4.set_ylabel('Anomaly Score', fontsize=11)
-    ax4.set_title('Score Distribution (Box Plot)', fontsize=13, fontweight='bold')
-    ax4.grid(alpha=0.3, axis='y')
+    ax3.set_ylabel('Anomaly Score', fontsize=11)
+    ax3.set_title('Score Distribution (Box Plot)', fontsize=13, fontweight='bold')
+    ax3.grid(alpha=0.3, axis='y')
     
-    # Cumulative Distribution
-    ax5 = fig.add_subplot(gs[1, 1])
-    ax5.hist(normal_scores, bins=100, cumulative=True, alpha=0.6, 
-            label='Normal', color='green', density=True, histtype='step', linewidth=2)
-    if len(current_fail_scores) > 0:
-        ax5.hist(current_fail_scores, bins=100, cumulative=True, alpha=0.6, 
-                label='Current Failure', color='red', density=True, histtype='step', linewidth=2)
-    if len(future_fail_scores) > 0:
-        ax5.hist(future_fail_scores, bins=100, cumulative=True, alpha=0.6, 
-                label='Future Failure', color='orange', density=True, histtype='step', linewidth=2)
-    ax5.set_xlabel('Anomaly Score', fontsize=11)
-    ax5.set_ylabel('Cumulative Probability', fontsize=11)
-    ax5.set_title('Cumulative Distribution', fontsize=13, fontweight='bold')
-    ax5.legend()
-    ax5.grid(alpha=0.3)
-    
-    # Statistics Summary Table
-    ax6 = fig.add_subplot(gs[1, 2])
-    ax6.axis('off')
-    
-    stats_data = []
-    stats_data.append(['Metric', 'Normal', 'Current Fail', 'Future Fail'])
-    stats_data.append(['Count', f"{len(normal_scores)}", 
-                      f"{len(current_fail_scores)}", f"{len(future_fail_scores)}"])
-    stats_data.append(['Mean Score', f"{normal_scores.mean():.4f}", 
-                      f"{current_fail_scores.mean():.4f}" if len(current_fail_scores) > 0 else "N/A",
-                      f"{future_fail_scores.mean():.4f}" if len(future_fail_scores) > 0 else "N/A"])
-    stats_data.append(['Std Dev', f"{normal_scores.std():.4f}", 
-                      f"{current_fail_scores.std():.4f}" if len(current_fail_scores) > 0 else "N/A",
-                      f"{future_fail_scores.std():.4f}" if len(future_fail_scores) > 0 else "N/A"])
-    stats_data.append(['Median', f"{np.median(normal_scores):.4f}", 
-                      f"{np.median(current_fail_scores):.4f}" if len(current_fail_scores) > 0 else "N/A",
-                      f"{np.median(future_fail_scores):.4f}" if len(future_fail_scores) > 0 else "N/A"])
-    
-    table = ax6.table(cellText=stats_data, cellLoc='center', loc='center',
+    ax4 = fig.add_subplot(gs[1, 0])
+    ax4.axis('off')
+    stats_data = [['Metric', 'Normal', 'Current Fail', 'Future Fail']]
+    groups = {
+        "Normal": normal_scores,
+        "Current Fail": current_fail_scores,
+        "Future Fail": future_fail_scores
+    }
+    stats_data.append([
+        'Count',
+        str(len(normal_scores)),
+        str(len(current_fail_scores)),
+        str(len(future_fail_scores))
+    ])
+    stats_data.append([
+        'Mean',
+        fmt(normal_scores.mean()),
+        fmt(current_fail_scores.mean()) if len(current_fail_scores) else "N/A",
+        fmt(future_fail_scores.mean()) if len(future_fail_scores) else "N/A"
+    ])
+    stats_data.append([
+        'Std',
+        fmt(normal_scores.std()),
+        fmt(current_fail_scores.std()) if len(current_fail_scores) else "N/A",
+        fmt(future_fail_scores.std()) if len(future_fail_scores) else "N/A"
+    ])
+    robust = {k: robust_stats(v) for k, v in groups.items() if len(v) > 0}
+    stats_data.append([
+        'Median',
+        fmt(robust['Normal']['median']),
+        fmt(robust['Current Fail']['median']) if 'Current Fail' in robust else "N/A",
+        fmt(robust['Future Fail']['median']) if 'Future Fail' in robust else "N/A"
+    ])
+    stats_data.append([
+        'IQR',
+        fmt(robust['Normal']['iqr']),
+        fmt(robust['Current Fail']['iqr']) if 'Current Fail' in robust else "N/A",
+        fmt(robust['Future Fail']['iqr']) if 'Future Fail' in robust else "N/A"
+    ])
+    stats_data.append([
+        'MAD',
+        fmt(robust['Normal']['mad']),
+        fmt(robust['Current Fail']['mad']) if 'Current Fail' in robust else "N/A",
+        fmt(robust['Future Fail']['mad']) if 'Future Fail' in robust else "N/A"
+    ])
+    tm_n, ts_n = trimmed_mean_std(normal_scores)
+    tm_c, ts_c = trimmed_mean_std(current_fail_scores) if len(current_fail_scores) else (None, None)
+    tm_f, ts_f = trimmed_mean_std(future_fail_scores) if len(future_fail_scores) else (None, None)
+    stats_data.append([
+        'Trimmed Mean',
+        fmt(tm_n),
+        fmt(tm_c),
+        fmt(tm_f)
+    ])
+    stats_data.append([
+        'Trimmed Std',
+        fmt(ts_n),
+        fmt(ts_c),
+        fmt(ts_f)
+    ])
+    table = ax4.table(cellText=stats_data, cellLoc='center', loc='center',
                      bbox=[0, 0, 1, 1])
     table.auto_set_font_size(False)
     table.set_fontsize(10)
     table.scale(1, 2)
-    
-    # Style header row
     for i in range(4):
         table[(0, i)].set_facecolor('#40466e')
         table[(0, i)].set_text_props(weight='bold', color='white')
-    
-    ax6.set_title('Summary Statistics', fontsize=13, fontweight='bold', pad=20)
-    
-    # Separation Metrics
-    ax7 = fig.add_subplot(gs[2, 0])
+    ax4.set_title('Summary Statistics', fontsize=13, fontweight='bold', pad=20)
+
+    ax5 = fig.add_subplot(gs[1, 1])
     metrics_text = f"Overall Performance:\n"
     metrics_text += f"  ROC AUC: {overall_roc:.4f}\n"
     metrics_text += f"  PR AUC: {overall_pr:.4f}\n\n"
@@ -165,7 +168,6 @@ def plot_anomaly_detection_analysis(scores, labels, pred_types, figsize=(20, 16)
         metrics_text += f"  ROC AUC: {future_roc:.4f}\n"
         metrics_text += f"  PR AUC: {future_pr:.4f}\n\n"
     
-    # Calculate separation between distributions
     if len(current_fail_scores) > 0:
         cohen_d_current = (current_fail_scores.mean() - normal_scores.mean()) / \
                          np.sqrt((current_fail_scores.std()**2 + normal_scores.std()**2) / 2)
@@ -176,49 +178,149 @@ def plot_anomaly_detection_analysis(scores, labels, pred_types, figsize=(20, 16)
                         np.sqrt((future_fail_scores.std()**2 + normal_scores.std()**2) / 2)
         metrics_text += f"Cohen's d (Normal vs Future): {cohen_d_future:.4f}\n"
     
-    ax7.text(0.1, 0.5, metrics_text, fontsize=11, verticalalignment='center',
+    ax5.text(0.1, 0.5, metrics_text, fontsize=11, verticalalignment='center',
             family='monospace', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
-    ax7.axis('off')
-    ax7.set_title('Performance Metrics', fontsize=13, fontweight='bold')
+    ax5.axis('off')
+    ax5.set_title('Performance Metrics', fontsize=13, fontweight='bold')
     
-    # Scatter plot of scores (if we have both types)
-    ax8 = fig.add_subplot(gs[2, 1])
-    if len(current_fail_scores) > 0 and len(future_fail_scores) > 0:
-        sample_size = min(1000, len(scores))
-        indices = np.random.choice(len(scores), sample_size, replace=False)
-        
-        for idx in indices:
-            if pred_types[idx] == 0:
-                ax8.scatter(idx, scores[idx], c='green', alpha=0.3, s=10)
-            elif pred_types[idx] == 1:
-                ax8.scatter(idx, scores[idx], c='red', alpha=0.6, s=20)
-            elif pred_types[idx] == 2:
-                ax8.scatter(idx, scores[idx], c='orange', alpha=0.6, s=20)
-        
-        ax8.set_xlabel('Sample Index', fontsize=11)
-        ax8.set_ylabel('Anomaly Score', fontsize=11)
-        ax8.set_title('Score Timeline (Sampled)', fontsize=13, fontweight='bold')
-        ax8.legend(['Normal', 'Current Failure', 'Future Failure'])
-    else:
-        ax8.text(0.5, 0.5, 'Insufficient data\nfor timeline view', 
-                ha='center', va='center', fontsize=12)
-        ax8.axis('off')
-    ax8.grid(alpha=0.3)
-    
-    # 9. Class Proportions
-    ax9 = fig.add_subplot(gs[2, 2])
+    ax6 = fig.add_subplot(gs[1, 2])
     counts = [len(normal_scores), len(current_fail_scores), len(future_fail_scores)]
     labels_pie = ['Normal', 'Current Failure', 'Future Failure']
     colors_pie = ['green', 'red', 'orange']
     
-    _, _, autotexts = ax9.pie(counts, labels=labels_pie, colors=colors_pie,
+    _, _, autotexts = ax6.pie(counts, labels=labels_pie, colors=colors_pie,
                                         autopct='%1.1f%%', startangle=90, labeldistance=1.2)
     for autotext in autotexts:
         autotext.set_color('white')
         autotext.set_fontweight('bold')
-    ax9.set_title('Class Distribution', fontsize=13, fontweight='bold')
+    ax6.set_title('Class Distribution', fontsize=13, fontweight='bold')
     
     plt.suptitle('Anomaly Detection Analysis: Current vs Future Failures', 
                 fontsize=16, fontweight='bold', y=0.995)
     
     return fig
+
+def robust_stats(x):
+    return {
+        "median": np.median(x),
+        "iqr": np.percentile(x, 75) - np.percentile(x, 25),
+        "mad": np.median(np.abs(x - np.median(x)))
+    }
+
+def trimmed_mean_std(x, k=1.5):
+    q1, q3 = np.percentile(x, [25, 75])
+    iqr = q3 - q1
+    mask = (x >= q1 - k * iqr) & (x <= q3 + k * iqr)
+    x_trim = x[mask]
+    return x_trim.mean(), x_trim.std()
+
+def fmt(x):
+    return f"{x:.4f}" if x is not None else "N/A"
+
+def plot_failure_analysis(scores, labels, pred_types, failure_types, failure_map):
+    if isinstance(scores, torch.Tensor): scores = scores.cpu().numpy()
+    if isinstance(labels, torch.Tensor): labels = labels.cpu().numpy()
+    if isinstance(failure_types, torch.Tensor): failure_types = failure_types.cpu().numpy()
+    
+    normal_indices = np.where(labels == 0)[0]
+    normal_scores = scores[normal_indices]
+    
+    results = []
+    
+    results.append({
+        'Failure_Name': 'Normal (Baseline)',
+        'Score': normal_scores,
+        'Type': 'Baseline',
+        'ROC_AUC': np.nan,
+        'PR_AUC': np.nan
+    })
+    
+    summary_metrics = []
+
+    print(f"Analyzing {failure_types.shape[1]} failure types...")
+    
+    for idx, name in failure_map.items():
+        fail_indices = np.where(failure_types[:, idx] == 1)[0]
+        
+        if len(fail_indices) < 5:
+            print(f"Skipping {name}: Too few samples ({len(fail_indices)})")
+            continue
+            
+        fail_scores = scores[fail_indices]
+        
+        curr_scores = np.concatenate([normal_scores, fail_scores])
+        curr_labels = np.concatenate([np.zeros(len(normal_scores)), np.ones(len(fail_scores))])
+        
+        roc = roc_auc_score(curr_labels, curr_scores)
+        pr = average_precision_score(curr_labels, curr_scores)
+        
+        results.append({
+            'Failure_Name': name,
+            'Score': fail_scores,
+            'Type': 'Failure',
+            'ROC_AUC': roc,
+            'PR_AUC': pr
+        })
+        
+        summary_metrics.append({
+            'Failure_Name': name,
+            'Count': len(fail_indices),
+            'ROC_AUC': roc,
+            'PR_AUC': pr,
+            'Mean_Score': np.mean(fail_scores),
+            'Median_Score': np.median(fail_scores),
+            'Std_Score': np.std(fail_scores)
+        })
+
+    df_metrics = pd.DataFrame(summary_metrics).sort_values(by='ROC_AUC', ascending=False)
+    
+    plot_data = []
+    for r in results:
+        for s in r['Score']:
+            plot_data.append({'Failure_Name': r['Failure_Name'], 'Score': s, 'Type': r['Type']})
+    df_plot = pd.DataFrame(plot_data)
+
+    plt.figure(figsize=(20, 12))
+    
+    plt.subplot(2, 1, 1)    
+    sort_order = ['Normal (Baseline)'] + df_metrics.sort_values(by='Median_Score', ascending=False)['Failure_Name'].tolist()
+    
+    sns.boxplot(
+        data=df_plot, 
+        x='Failure_Name', 
+        y='Score', 
+        hue='Type', 
+        order=sort_order,
+        palette={'Baseline': 'forestgreen', 'Failure': 'firebrick'},
+        showfliers=False, # hide outliers
+    )
+    plt.yscale('symlog', linthresh=100)
+    plt.title('Distribution of Anomaly Scores by Failure Type (symlog scale)', fontsize=14, fontweight='bold')
+    plt.xticks(rotation=45, ha='right')
+    plt.grid(True, axis='y', alpha=0.3)
+    plt.xlabel("")
+    
+    plt.subplot(2, 1, 2)
+    
+    df_melted = df_metrics.melt(id_vars="Failure_Name", value_vars=["ROC_AUC", "PR_AUC"], var_name="Metric", value_name="Value")
+    
+    sns.barplot(
+        data=df_melted, 
+        x='Failure_Name', 
+        y='Value', 
+        hue='Metric',
+        palette="viridis"
+    )
+    
+    plt.axhline(0.5, color='red', linestyle='--', label='Random Guess')
+    
+    plt.title('Model Detection Performance (AUC) by Failure Type', fontsize=14, fontweight='bold')
+    plt.ylim(0, 1.05)
+    plt.xticks(rotation=45, ha='right')
+    plt.legend(loc='lower right')
+    plt.grid(True, axis='y', alpha=0.3)
+
+    plt.tight_layout()
+    plt.show()
+    
+    return df_metrics

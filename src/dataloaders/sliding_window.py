@@ -12,21 +12,27 @@ class PredictionType(Enum):
     CLEAR_FAILURE = 1
     PRE_FAILURE = 2
 
-# TODO: adicionar filtro temporal (x horas pré-falha)
 class LogsSlidingWindow(Dataset):
     def __init__(
             self, 
-            df: pl.DataFrame, 
+            df: pl.DataFrame,
             window_size='5m', 
             step_size='1m', 
             n_prediction_window=1,
             event_ids=None, 
             filter_strategy='none', 
-            filter_params=None
-            ):  
+            filter_params=None,
+            embedder=None,
+            mode='count' # pptions: 'count', 'bert', 'hybrid'
+        ):  
         self.filter_strategy = filter_strategy
         self.filter_params = filter_params or {}
         self.n_prediction_window = n_prediction_window
+        self.embedder = embedder
+        self.mode = mode
+
+        if self.mode in ['bert', 'hybrid'] and self.embedder is None:
+            raise ValueError(f"Mode '{self.mode}' requires an embedder object.")
 
         self.df = df.sort('Timestamp')
         print(f"Sorted {len(self.df)} rows by timestamp")
@@ -38,11 +44,34 @@ class LogsSlidingWindow(Dataset):
             self.event_ids = sorted(self.df['EventId'].unique().to_list())
         else:
             self.event_ids = event_ids
+
+        # create mapping of failure types
+        unique_failures = (
+            self.df.filter(pl.col('Anomaly') == True)
+            ['Label']
+            .unique()
+            .sort()
+            .to_list()
+        )        
+        self.failure_ids = unique_failures
+        self.failure_to_idx = {name: i for i, name in enumerate(self.failure_ids)}
+        self.n_failure_types = len(self.failure_ids)
+        print(f"Found {self.n_failure_types} failure types: {self.failure_ids}")
         
         # create a dictionary: EventId -> position in count vector
         self.event_to_idx = {e: i for i, e in enumerate(self.event_ids)}
         self.n_events = len(self.event_ids)
         print(f"Found {self.n_events} unique event types")
+
+        if self.mode == 'bert':
+            # BERT + intensity (1)
+            self.input_dim = self.embedder.embedding_dim + 1
+        elif self.mode == 'hybrid':
+            # count + BERT
+            self.input_dim = self.n_events + self.embedder.embedding_dim
+        else:
+            # just count
+            self.input_dim = self.n_events
 
         # create mapping column in DataFrame
         mapping_df = pl.DataFrame({
@@ -128,37 +157,57 @@ class LogsSlidingWindow(Dataset):
 
         future_data = self.df[end_idx:pred_end_idx]
 
-        count_tensor, label_tensor, prediction_type_tensor = self._count_vectorize(window_data, future_data)
+        count_tensor, label_tensor, prediction_type_tensor, failure_types_found = self._count_vectorize(window_data, future_data)
         
-        return count_tensor, label_tensor, prediction_type_tensor
+        return count_tensor, label_tensor, prediction_type_tensor, failure_types_found
 
     def _count_vectorize(self, window_data, future_data):
-        # create count vector
-        count_vector = np.zeros(self.n_events, dtype=np.float32)
-
-        if len(window_data) > 0:
-            if self.mask_input_failures:
-                valid_logs = window_data.filter(pl.col('Anomaly') == False)
-            else:
-                valid_logs = window_data
-
-            valid_logs = valid_logs.drop_nulls(subset=["EventIndex"])
-
-            if len(valid_logs) > 0:
-                counts = valid_logs['EventIndex'].value_counts()
-                indices = counts['EventIndex'].to_numpy().astype(np.int64)
-                values = counts['count'].to_numpy().astype(np.float32)
-
-                count_vector[indices] = values
-
-            # apply log normalization | TODO: explicar ou validar se é o melhor método
-            count_vector = np.log1p(count_vector)
+        if self.mask_input_failures and len(window_data) > 0:
+            valid_logs = window_data.filter(pl.col('Anomaly') == False)
+        else:
+            valid_logs = window_data
             
-            # label is anomaly if any failure event occurred in this window
-            anomaly = window_data.select(pl.col("Anomaly").any()).item()
+        has_data = len(valid_logs) > 0
+
+        if self.mode in ['count', 'hybrid']:
+            count_vec = np.zeros(self.n_events, dtype=np.float32)
+            if has_data:
+                valid_logs = valid_logs.drop_nulls(subset=["EventIndex"])
+                if len(valid_logs) > 0:
+                    counts = valid_logs['EventIndex'].value_counts()
+                    indices = counts['EventIndex'].to_numpy().astype(np.int64)
+                    values = counts['count'].to_numpy().astype(np.float32)
+                    count_vec[indices] = values
+                count_vec = np.log1p(count_vec)
+
+        if self.mode in ['bert', 'hybrid']:
+            if has_data:
+                counts_df = valid_logs['EventId'].value_counts()
+                eids = counts_df['EventId'].to_list()
+                counts = counts_df['count'].to_list()
+                
+                bert_vec = self.embedder.transform_window(eids, counts)
+                
+                if self.mode == 'bert':
+                    total_logs = np.sum(counts)
+                    intensity = np.log1p(total_logs)
+                    bert_vec = np.concatenate([bert_vec, [intensity]])
+            else:
+                dim = self.embedder.embedding_dim + (1 if self.mode == 'bert' else 0)
+                bert_vec = np.zeros(dim, dtype=np.float32)
+
+        if self.mode == 'hybrid':
+            final_vector = np.concatenate([count_vec, bert_vec])
+        elif self.mode == 'bert':
+            final_vector = bert_vec
+        else:
+            final_vector = count_vec
+
+        count_tensor = torch.tensor(final_vector, dtype=torch.float32)
         
         is_current_anomalous = False
         if len(window_data) > 0:
+            # label is anomaly if any failure event occurred in this window
             is_current_anomalous = window_data.select(pl.col("Anomaly").any()).item()
 
         is_future_anomalous = False
@@ -175,11 +224,35 @@ class LogsSlidingWindow(Dataset):
             pred_type = PredictionType.NORMAL
             anomaly = False
               
-        count_tensor = torch.tensor(count_vector, dtype=torch.float32)
         label_tensor = torch.tensor(1 if anomaly else 0, dtype=torch.long)
         prediction_type = torch.tensor(pred_type.value, dtype=torch.long)
+
+        # get failure types found 
+        failure_vec = np.zeros(self.n_failure_types, dtype=np.float32)
+        current_failures = []
+        if len(window_data) > 0:
+            current_failures = (
+                window_data.filter(pl.col("Anomaly") == True)
+                ['Label']
+                .unique()
+                .to_list()
+            )            
+        future_failures = []
+        if len(future_data) > 0:
+            future_failures = (
+                future_data.filter(pl.col("Anomaly") == True)
+                ['Label']
+                .unique()
+                .to_list()
+            )
+        all_found_failures = set(current_failures + future_failures)
+        for f_name in all_found_failures:
+            if f_name in self.failure_to_idx:
+                idx = self.failure_to_idx[f_name]
+                failure_vec[idx] = 1.0
+        failure_type_tensor = torch.tensor(failure_vec, dtype=torch.float32)
         
-        return count_tensor, label_tensor, prediction_type
+        return count_tensor, label_tensor, prediction_type, failure_type_tensor
     
     def _apply_label_filtering(self):
         original_len = len(self.df)
@@ -191,7 +264,7 @@ class LogsSlidingWindow(Dataset):
         # generate count vectors for all windows
         count_vectors = []
         for idx in range(len(self)):
-            count_tensor, _, _ = self.__getitem__(idx)
+            count_tensor, _, _, _ = self.__getitem__(idx)
             count_vectors.append(count_tensor.numpy())
         
         X = np.array(count_vectors)
@@ -211,3 +284,6 @@ class LogsSlidingWindow(Dataset):
         removed = (~normal_mask).sum()
         print(f"Isolation Forest: Removed {removed} windows ({removed/len(normal_mask)*100:.1f}%)")
         print(f"Remaining windows: {len(self.window_starts)}")
+    
+    def get_failure_map(self):
+        return {v: k for k, v in self.failure_to_idx.items()}

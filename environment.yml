@@ -15,11 +15,13 @@ dependencies:
   - tqdm
   - seaborn
   - optuna
-  - pyro-ppl 
+  - pyro-ppl
+  - sentence-transformers
 
   - pip:
     - --extra-index-url https://download.pytorch.org/whl/cu130
     - torch
     - torchvision
     - logparser3
+    - "datasets>=2.20.0"
     
