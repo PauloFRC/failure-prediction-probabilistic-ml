@@ -17,6 +17,7 @@ dependencies:
   - optuna
   - pyro-ppl
   - sentence-transformers
+  - gpytorch
 
   - pip:
     - --extra-index-url https://download.pytorch.org/whl/cu130

@@ -16,4 +16,10 @@ This project requires conda. Setup the environment and setup the project running
 
 `make`
 
+## Project Structure
+
+- The main notebooks (parsing.ipynb, VAE.ipynb, GP.ipynb) are in src/notebooks
+- src/dataloaders has vectorization for sliding window and bert
+- util has utility functions, including bayesian optimization
+
 

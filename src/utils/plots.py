@@ -221,6 +221,7 @@ def plot_failure_analysis(scores, labels, pred_types, failure_types, failure_map
     if isinstance(scores, torch.Tensor): scores = scores.cpu().numpy()
     if isinstance(labels, torch.Tensor): labels = labels.cpu().numpy()
     if isinstance(failure_types, torch.Tensor): failure_types = failure_types.cpu().numpy()
+    if isinstance(pred_types, torch.Tensor): pred_types = pred_types.cpu().numpy()
     
     normal_indices = np.where(labels == 0)[0]
     normal_scores = scores[normal_indices]
@@ -240,6 +241,7 @@ def plot_failure_analysis(scores, labels, pred_types, failure_types, failure_map
     print(f"Analyzing {failure_types.shape[1]} failure types...")
     
     for idx, name in failure_map.items():
+        
         fail_indices = np.where(failure_types[:, idx] == 1)[0]
         
         if len(fail_indices) < 5:
@@ -315,6 +317,130 @@ def plot_failure_analysis(scores, labels, pred_types, failure_types, failure_map
     plt.axhline(0.5, color='red', linestyle='--', label='Random Guess')
     
     plt.title('Model Detection Performance (AUC) by Failure Type', fontsize=14, fontweight='bold')
+    plt.ylim(0, 1.05)
+    plt.xticks(rotation=45, ha='right')
+    plt.legend(loc='lower right')
+    plt.grid(True, axis='y', alpha=0.3)
+
+    plt.tight_layout()
+    plt.show()
+    
+    return df_metrics
+
+def plot_future_failure_analysis(scores, labels, pred_types, failure_types, failure_map):
+    if isinstance(scores, torch.Tensor): scores = scores.cpu().numpy()
+    if isinstance(labels, torch.Tensor): labels = labels.cpu().numpy()
+    if isinstance(pred_types, torch.Tensor): pred_types = pred_types.cpu().numpy()
+    if isinstance(failure_types, torch.Tensor): failure_types = failure_types.cpu().numpy()
+    
+    normal_indices = np.where(pred_types == 0)[0]
+    normal_scores = scores[normal_indices]
+    
+    results = []
+    
+    results.append({
+        'Failure_Name': 'Normal (Baseline)',
+        'Score': normal_scores,
+        'Type': 'Baseline',
+        'ROC_AUC': np.nan,
+        'PR_AUC': np.nan
+    })
+    
+    summary_metrics = []
+
+    print(f"Analyzing {failure_types.shape[1]} failure types for PRE-FAILURE (Future) detection...")
+    print(f"Baseline samples: {len(normal_indices)}")
+    
+    for idx, name in failure_map.items():
+        is_specific_failure = failure_types[:, idx] == 1
+        is_future_prediction = pred_types == 2
+        
+        fail_indices = np.where(is_specific_failure & is_future_prediction)[0]
+        
+        skipped_indices = np.where(is_specific_failure & (pred_types == 1))[0]
+        
+        if len(fail_indices) < 5:
+            if len(skipped_indices) > 0:
+                 print(f"Skipping {name}: Found {len(skipped_indices)} current failures, but only {len(fail_indices)} future predictions.")
+            continue
+            
+        fail_scores = scores[fail_indices]
+        
+        curr_scores = np.concatenate([normal_scores, fail_scores])
+        curr_labels = np.concatenate([np.zeros(len(normal_scores)), np.ones(len(fail_scores))])
+        
+        try:
+            roc = roc_auc_score(curr_labels, curr_scores)
+            pr = average_precision_score(curr_labels, curr_scores)
+        except ValueError:
+            roc, pr = 0.5, 0.0 
+        
+        results.append({
+            'Failure_Name': name,
+            'Score': fail_scores,
+            'Type': 'Future Failure',
+            'ROC_AUC': roc,
+            'PR_AUC': pr
+        })
+        
+        summary_metrics.append({
+            'Failure_Name': name,
+            'Count': len(fail_indices),
+            'Skipped_Current_Failures': len(skipped_indices),
+            'ROC_AUC': roc,
+            'PR_AUC': pr,
+            'Mean_Score': np.mean(fail_scores),
+            'Median_Score': np.median(fail_scores),
+            'Std_Score': np.std(fail_scores)
+        })
+
+    if not summary_metrics:
+        print("No failure types had enough future prediction samples to plot.")
+        return pd.DataFrame()
+
+    df_metrics = pd.DataFrame(summary_metrics).sort_values(by='ROC_AUC', ascending=False)
+    
+    plot_data = []
+    for r in results:
+        for s in r['Score']:
+            plot_data.append({'Failure_Name': r['Failure_Name'], 'Score': s, 'Type': r['Type']})
+    df_plot = pd.DataFrame(plot_data)
+
+    plt.figure(figsize=(20, 12))
+    
+    plt.subplot(2, 1, 1)    
+    sort_order = ['Normal (Baseline)'] + df_metrics.sort_values(by='Median_Score', ascending=False)['Failure_Name'].tolist()
+    
+    sns.boxplot(
+        data=df_plot, 
+        x='Failure_Name', 
+        y='Score', 
+        hue='Type', 
+        order=sort_order,
+        palette={'Baseline': 'forestgreen', 'Future Failure': 'darkorange'}, # Changed color to indicate warning/future
+        showfliers=False, 
+    )
+    plt.yscale('symlog', linthresh=100)
+    plt.title('Anomaly Scores: Normal vs Future Failures (Predictive Power)', fontsize=14, fontweight='bold')
+    plt.xticks(rotation=45, ha='right')
+    plt.grid(True, axis='y', alpha=0.3)
+    plt.xlabel("")
+    
+    plt.subplot(2, 1, 2)
+    
+    df_melted = df_metrics.melt(id_vars="Failure_Name", value_vars=["ROC_AUC", "PR_AUC"], var_name="Metric", value_name="Value")
+    
+    sns.barplot(
+        data=df_melted, 
+        x='Failure_Name', 
+        y='Value', 
+        hue='Metric',
+        palette="viridis"
+    )
+    
+    plt.axhline(0.5, color='red', linestyle='--', label='Random Guess')
+    
+    plt.title('Predictive Performance (AUC) for Future Failures', fontsize=14, fontweight='bold')
     plt.ylim(0, 1.05)
     plt.xticks(rotation=45, ha='right')
     plt.legend(loc='lower right')
